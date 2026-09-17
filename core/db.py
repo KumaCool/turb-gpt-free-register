@@ -2979,7 +2979,11 @@ def create_retry_job(
             parent_job_id=int(source_job_id),
             root_job_id=root_id,
             retry_attempt=(max(attempts) if attempts else 0) + 1,
-            retry_action=("codex" if job_type == "codex_retry" else "registration"),
+            retry_action=(
+                "codex" if job_type == "codex_retry"
+                else "session_recover" if job_type == "session_recover"
+                else "registration"
+            ),
             email=email,
             account_id=account_id,
         )

@@ -586,7 +586,12 @@ def run_registration(
                     logger.info(f"[邮箱:{src}] {email} 已恢复 available")
         except Exception:
             pass
-        return {"success": False, "email": email, "error": str(e)}
+        return {
+            "success": False,
+            "email": email,
+            "account_created": bool(create_acknowledged),
+            "error": str(e),
+        }
 
 
 def main():

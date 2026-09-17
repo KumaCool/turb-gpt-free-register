@@ -337,20 +337,35 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 # 注意：失败也可能伴随 account_id（如 Codex 失败但账号已注册成功）
                 err = (result or {}).get("error") if isinstance(result, dict) else "unknown"
                 result_email = (result or {}).get("email") if isinstance(result, dict) else None
+                account_id = (result or {}).get("account_id") if isinstance(result, dict) else None
+                if (
+                    isinstance(result, dict)
+                    and result.get("account_created")
+                    and not account_id
+                    and str(result_email or "").strip()
+                ):
+                    account_id = _ensure_placeholder_account(
+                        str(result_email).strip(),
+                        email_source=str((db.get_job(job_id) or current or {}).get("email_source") or "") or None,
+                    )
+                    log_logger.warning(
+                        f"[Job {job_id}] 资料已交但未拿到 AT，已落无 AT 账号 #{account_id}"
+                    )
                 db.update_job(
                     job_id,
                     status="failed",
                     email=result_email,
-                    account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
+                    account_id=account_id,
                     network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
                     error=str(err)[:500],
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 email_to_handle = str(result_email or email or "").strip()
-                if _should_disable_failed_registration_email(err):
-                    _disable_job_email(email_to_handle, str(err))
-                else:
-                    _release_unconsumed_job_email(email_to_handle, str(err))
+                if not account_id:
+                    if _should_disable_failed_registration_email(err):
+                        _disable_job_email(email_to_handle, str(err))
+                    else:
+                        _release_unconsumed_job_email(email_to_handle, str(err))
                 log_logger.error(f"[Job {job_id}] 失败: {err}")
     except StopRequested as exc:
         _release_unconsumed_job_email(email, str(exc))
@@ -436,6 +451,90 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
         _deactivate_job(job_id)
 
 
+def _run_session_recover_job(job_id: int, log_file: str, email: str, account_id: int) -> None:
+    """同一邮箱走查活补 AT，不重新注册、不换邮箱。"""
+    from core.account_liveness import check_account_liveness
+    from core.chatgpt_plan import resolve_plan_check_route
+
+    _activate_job(job_id)
+    current = db.get_job(job_id)
+    if not current or current.get("status") == "cancelled":
+        _deactivate_job(job_id)
+        return
+
+    db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
+    try:
+        with _JobLogContext(log_file):
+            log_logger = logging.getLogger(__name__)
+            log_logger.info(f"[Job {job_id}] 开始补 token：{email}")
+            account = db.get_account(int(account_id)) or {}
+            email_source = str(account.get("email_source") or current.get("email_source") or "").strip() or None
+            route = resolve_plan_check_route(explicit_proxy=None)
+            result = check_account_liveness(
+                email,
+                proxy=route.get("proxy"),
+                clear_log=False,
+                email_source=email_source,
+            )
+            db.update_account_liveness(int(account_id), result)
+            now_iso = datetime.now().isoformat(timespec="seconds")
+            if is_stop_requested(job_id):
+                db.update_job(
+                    job_id,
+                    status="stopped",
+                    email=email,
+                    account_id=account_id,
+                    error="用户手动停止",
+                    completed_at=now_iso,
+                )
+                return
+            if result.get("ok") and str(result.get("access_token") or "").strip():
+                db.update_job(
+                    job_id,
+                    status="success",
+                    email=email,
+                    account_id=account_id,
+                    completed_at=now_iso,
+                )
+                log_logger.info(f"[Job {job_id}] 补 token 成功：{email}")
+                return
+            status = str(result.get("status") or "failed")
+            err = str(result.get("error") or "补 token 失败")[:500]
+            if status == "deactivated":
+                db.update_account_codex_status(email, "deactivated", err)
+            db.update_job(
+                job_id,
+                status="failed",
+                email=email,
+                account_id=account_id,
+                error=err,
+                completed_at=now_iso,
+            )
+            log_logger.error(f"[Job {job_id}] 补 token 失败：{err}")
+    except StopRequested as exc:
+        db.update_job(
+            job_id,
+            status="stopped",
+            email=email,
+            account_id=account_id,
+            error="用户手动停止",
+            completed_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        logger.warning("[Job %s] 补 token 已停止: %s", job_id, exc)
+    except Exception as exc:
+        db.update_job(
+            job_id,
+            status="failed",
+            email=email,
+            account_id=account_id,
+            error=f"{type(exc).__name__}: {exc}"[:500],
+            completed_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        logger.exception("[Job %s] 补 token 异常", job_id)
+    finally:
+        _deactivate_job(job_id)
+
+
 # ============================================================
 # 公共接口
 # ============================================================
@@ -488,6 +587,104 @@ def _account_for_job(job: dict) -> dict | None:
     return db.get_account_by_email(email) if email else None
 
 
+def _account_has_access_token(account: dict | None) -> bool:
+    if not account:
+        return False
+    return bool(str(account.get("access_token") or "").strip())
+
+
+def _ensure_placeholder_account(email: str, email_source: str | None = None) -> int:
+    """资料已交但还没有 AT 时落一条空 token 账号，供补 token / 查活用。"""
+    existing = db.get_account_by_email(email)
+    if existing and existing.get("id") is not None:
+        return int(existing["id"])
+    return int(
+        db.insert_account(
+            email=email,
+            access_token="",
+            email_source=email_source,
+        )
+    )
+
+
+def _email_pool_status(email: str) -> str | None:
+    email = str(email or "").strip()
+    if not email:
+        return None
+    lookups = (
+        db.get_outlook_by_email,
+        db.get_generic_api_email_by_email,
+        db.get_imap_email_by_email,
+        db.get_domain_email_by_email,
+    )
+    for lookup in lookups:
+        row = lookup(email)
+        if row:
+            return str(row.get("status") or "") or None
+    return None
+
+
+def _is_session_access_token_timeout(error: object) -> bool:
+    return "等待 /api/auth/session accessToken 超时" in str(error or "")
+
+
+def _job_log_has_access_token(job: dict | None) -> bool:
+    """日志已出现「已拿到 accessToken」时，视为号已建、只是没入库。"""
+    if not job:
+        return False
+    log_file = str(job.get("log_file") or "").strip()
+    if not log_file:
+        return False
+    path = Path(log_file)
+    if not path.is_file():
+        return False
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > 50_000:
+                f.seek(size - 50_000)
+            data = f.read()
+        return "已拿到 accessToken" in data.decode("utf-8", errors="replace")
+    except Exception:
+        return False
+
+
+def _mark_job_email_failed(email: str | None, reason: str) -> None:
+    """已建号缺 AT：邮箱保持 failed，不回池、不换号。"""
+    if not email:
+        return
+    try:
+        from core.email_provider import release_email
+
+        release_email(email, status="failed", note=f"已建号缺 AT: {reason[:180]}")
+    except Exception:
+        logger.exception("[Service] 标记已建号邮箱 failed 失败: %s", email)
+
+
+def _ensure_recover_placeholder(job: dict, email: str) -> int:
+    account_id = _ensure_placeholder_account(
+        email,
+        email_source=str(job.get("email_source") or "") or None,
+    )
+    _mark_job_email_failed(email, "保留邮箱供补 token")
+    return account_id
+
+
+def _needs_session_recover(job: dict, account: dict | None) -> bool:
+    if _account_has_access_token(account):
+        return False
+    if account and not _account_has_access_token(account):
+        return True
+    email = str(job.get("email") or "").strip()
+    if not email:
+        return False
+    if _job_log_has_access_token(job):
+        return True
+    if not _is_session_access_token_timeout(job.get("error_message") or job.get("error")):
+        return False
+    return _email_pool_status(email) == "failed"
+
+
 def get_retry_info(job: dict) -> dict:
     """返回给 API/UI 的重试能力描述，不依赖前端猜测错误阶段。"""
     status = str(job.get("status") or "")
@@ -501,22 +698,31 @@ def get_retry_info(job: dict) -> dict:
     if status not in ("failed", "stopped", "cancelled"):
         return info
 
+    account = _account_for_job(job)
+    if account and job.get("account_id") is not None and status in ("failed", "stopped"):
+        info["display_status"] = "success" if (account.get("codex_status") or "") == "success" else "partial_success"
+
+    live_status = str((account or {}).get("live_check_status") or "")
+    if live_status == "deactivated" or str((account or {}).get("codex_status") or "") == "deactivated":
+        info["retry_reason"] = "账号已废号，不能补跑 Codex"
+        return info
+
+    if _needs_session_recover(job, account):
+        info.update({
+            "retryable": True,
+            "retry_action": "session_recover",
+            "retry_label": "补 token",
+        })
+        return info
+
     successful_retry = db.get_successful_retry_for_job(int(job.get("id") or 0))
     if successful_retry is not None:
         info["retry_reason"] = f"后续重试任务 #{successful_retry.get('id')} 已成功"
         info["successful_retry_job_id"] = successful_retry.get("id")
         return info
 
-    account = _account_for_job(job)
-    if account and job.get("account_id") is not None and status in ("failed", "stopped"):
-        info["display_status"] = "success" if (account.get("codex_status") or "") == "success" else "partial_success"
-
-    if account:
-        codex_status = str(account.get("codex_status") or "")
-        if codex_status == "deactivated":
-            info["retry_reason"] = "账号已废号，不能补跑 Codex"
-            return info
-        if codex_status == "success":
+    if account and _account_has_access_token(account):
+        if str(account.get("codex_status") or "") == "success":
             info["retry_reason"] = "账号和 Codex 授权均已完成"
             return info
         info.update({
@@ -535,7 +741,7 @@ def get_retry_info(job: dict) -> dict:
 
 
 def retry_job(job_id: int, workers: int | None = None) -> dict:
-    """智能重试终态任务：未生成账号则重新注册，已有账号则仅补跑 Codex。"""
+    """智能重试终态任务：缺 AT 则同一邮箱补 token，未建号则重新注册，已有 AT 则补跑 Codex。"""
     source = db.get_job(job_id)
     if source is None:
         return {"ok": False, "error": "任务不存在", "status": 404}
@@ -550,6 +756,49 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
     email = str((account or {}).get("email") or source.get("email") or "").strip()
     account_id = int(account["id"]) if account and account.get("id") is not None else None
     reserved_codex = False
+    if action == "session_recover":
+        if not email:
+            return {"ok": False, "error": "没有邮箱，无法补 token", "status": 409}
+        account_id = _ensure_recover_placeholder(source, email)
+        db.update_job(int(job_id), email=email, account_id=account_id)
+        source = db.get_job(job_id) or source
+        if str(source.get("status") or "") in ("running", "stopping"):
+            return {"ok": False, "error": "该任务正在补 token，请稍候", "status": 409}
+        try:
+            with _executor_lock:
+                executor = get_executor(max_workers=workers)
+                executor.submit(
+                    _run_session_recover_job,
+                    int(job_id),
+                    source.get("log_file"),
+                    email,
+                    int(account_id),
+                )
+        except Exception as exc:
+            db.update_job(
+                int(job_id),
+                status="failed",
+                email=email,
+                account_id=account_id,
+                error=f"队列提交失败：{type(exc).__name__}: {exc}"[:500],
+                completed_at=datetime.now().isoformat(timespec="seconds"),
+            )
+            logger.exception("[Service] 原任务 #%s 补 token 提交线程池失败", job_id)
+            return {
+                "ok": False,
+                "error": "补 token 提交执行失败",
+                "status": 500,
+                "job": db.get_job(int(job_id)),
+            }
+        return {
+            "ok": True,
+            "created": False,
+            "reused": True,
+            "message": f"已在原任务 #{job_id} 开始补 token",
+            "source_job_id": int(job_id),
+            "retry_action": action,
+            "job": db.get_job(int(job_id)),
+        }
     if action == "codex":
         if not email or account_id is None:
             return {"ok": False, "error": "已注册账号信息不完整，无法补跑 Codex", "status": 409}
@@ -557,13 +806,19 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             return {"ok": False, "error": "该账号正在补跑 Codex，请稍候", "status": 409}
         reserved_codex = True
 
+    job_type = (
+        "codex_retry" if action == "codex"
+        else "session_recover" if action == "session_recover"
+        else "registration"
+    )
+    keep_email = action in ("codex", "session_recover")
     try:
         job, created = db.create_retry_job(
             int(job_id),
-            job_type="codex_retry" if action == "codex" else "registration",
+            job_type=job_type,
             email_source=str(source.get("email_source") or "outlook"),
-            email=email if action == "codex" else None,
-            account_id=account_id if action == "codex" else None,
+            email=email if keep_email else None,
+            account_id=account_id if keep_email else None,
         )
     except LookupError as exc:
         if reserved_codex:
@@ -587,6 +842,11 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             "job": job,
         }
 
+    action_label = (
+        "Codex 补跑" if action == "codex"
+        else "补 token" if action == "session_recover"
+        else "完整注册"
+    )
     try:
         if action == "codex":
             db.update_account_codex_status(email, "retrying", None)
@@ -594,6 +854,8 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             executor = get_executor(max_workers=workers)
             if action == "codex":
                 executor.submit(_run_codex_retry_job, job["id"], job["log_file"], email, int(account_id))
+            elif action == "session_recover":
+                executor.submit(_run_session_recover_job, job["id"], job["log_file"], email, int(account_id))
             else:
                 executor.submit(_run_one_job, job["id"], job["log_file"])
     except Exception as exc:
@@ -613,7 +875,7 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
         "ok": True,
         "created": True,
         "reused": False,
-        "message": f"已创建重试任务 #{job['id']}（{'Codex 补跑' if action == 'codex' else '完整注册'}）",
+        "message": f"已创建重试任务 #{job['id']}（{action_label}）",
         "source_job_id": int(job_id),
         "retry_action": action,
         "job": job,
@@ -669,16 +931,26 @@ def request_stop_job(job_id: int) -> dict:
             with _STOP_LOCK:
                 _STOP_EVENTS.pop(int(job_id), None)
                 _ACTIVE_JOBS.discard(int(job_id))
-            db.update_job(
-                job_id,
-                status="stopped",
-                completed_at=now_iso,
-                error="用户手动停止（任务实例不存在）",
-            )
-            _release_unconsumed_job_email(
-                str(job.get("email") or "").strip() or None,
-                "任务实例不存在，确认未继续执行",
-            )
+            email = str(job.get("email") or "").strip() or None
+            account_id = job.get("account_id")
+            if email and _job_log_has_access_token(job):
+                account_id = _ensure_recover_placeholder(job, email)
+                db.update_job(
+                    job_id,
+                    status="stopped",
+                    completed_at=now_iso,
+                    error="用户手动停止（任务实例不存在）",
+                    email=email,
+                    account_id=account_id,
+                )
+            else:
+                db.update_job(
+                    job_id,
+                    status="stopped",
+                    completed_at=now_iso,
+                    error="用户手动停止（任务实例不存在）",
+                )
+                _release_unconsumed_job_email(email, "任务实例不存在，确认未继续执行")
             _append_job_log(job_id, "用户手动停止：未找到运行中的任务实例，已直接标记为已停止。")
             logger.warning("[Service] 用户停止任务 #%s：任务实例不存在，已直接标记 stopped", job_id)
             return {"ok": True, "message": "任务实例不存在，已直接标记为已停止", "job_id": job_id, "state": "stopped"}

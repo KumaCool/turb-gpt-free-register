@@ -2908,6 +2908,7 @@ def run_browser_use_registration(
             "success": False,
             "email": email,
             "network_traffic": network_traffic,
+            "account_created": bool(create_acknowledged),
             "error": f"{type(exc).__name__}: {str(exc)[:300]}",
         }
     finally:
