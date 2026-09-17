@@ -37,6 +37,10 @@ _PUBLIC_INBOX_LINK_RE = re.compile(r"^/i/([^/?#]+)/*$", re.IGNORECASE)
 _PUBLIC_INBOX_API_RE = re.compile(
     r"^/api/public/inboxes/([^/?#]+)/latest-code/*$", re.IGNORECASE,
 )
+_PICKUP_PAGE_RE = re.compile(
+    r"^/pickup/([^/?#]+?)(?:/messages)?/*$",
+    re.IGNORECASE,
+)
 _YANGYANG_OPENAI_SUBJECT_HINTS = (
     "temporary chatgpt",
     "chatgpt verification code",
@@ -70,6 +74,15 @@ def _redact_proxy_url(proxy_url: str) -> str:
         return f"{parsed.scheme}://{auth}{host}{port}"
     except Exception:
         return "configured-proxy"
+
+
+def _is_loopback_url(url: str) -> bool:
+    """本机取码地址不能走代理，否则 127.0.0.1 会被送到远程代理上。"""
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower()
+    except Exception:
+        return False
+    return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"} or host.endswith(".localhost")
 
 
 def _new_http_session(proxy_url: str = "") -> requests.Session:
@@ -126,6 +139,136 @@ def _public_inbox_page_api_url(code_url: str) -> str | None:
     if not latest_url:
         return None
     return latest_url.rsplit("/latest-code", 1)[0]
+
+
+def _parse_pickup_page_url(code_url: str) -> tuple[str, str] | None:
+    """解析 iCloud 取件页 /pickup/{token}，返回 (origin, token)。"""
+    try:
+        parsed = urlparse(str(code_url or "").strip())
+    except Exception:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    match = _PICKUP_PAGE_RE.match(parsed.path or "")
+    if not match:
+        return None
+    token = unquote(match.group(1)).strip()
+    if not token or token.lower() == "messages":
+        return None
+    origin = urlunparse((parsed.scheme, parsed.netloc, "", "", "", "")).rstrip("/")
+    return origin, token
+
+
+def _pickup_message_sort_key(item: dict) -> tuple[float, int]:
+    ts = _parse_generic_api_ts(item.get("date") or item.get("receivedAt") or item.get("received_at")) or 0.0
+    raw_id = str(item.get("id") or "0")
+    try:
+        uid = int(raw_id)
+    except Exception:
+        uid = 0
+    return ts, uid
+
+
+def _extract_pickup_otp(subject: str, *bodies: str) -> str | None:
+    text = chr(10).join(str(part or "") for part in bodies)
+    code = _extract_yangyang_openai_code(subject, text)
+    if code:
+        return code
+    return _extract_code(chr(10).join([subject, text]).strip())
+
+
+def _fetch_pickup_page_otp(
+    session: requests.Session,
+    origin: str,
+    token: str,
+    headers: dict,
+    after_ts: float | None = None,
+) -> tuple[str, dict] | None:
+    """按取件页异步接口取最新邮件正文，而不是抓 HTML 壳。"""
+    safe_token = quote(token, safe="")
+    list_url = f"{origin}/pickup/{safe_token}/messages"
+    resp = session.get(
+        list_url,
+        headers={**headers, "Accept": "application/json"},
+        timeout=20,
+        verify=False,
+    )
+    if resp.status_code == 404:
+        raise GenericApiMailError("取件链接无效或已撤销")
+    if resp.status_code != 200:
+        logger.debug("[GenericAPI] pickup messages HTTP %s: %s", resp.status_code, (resp.text or "")[:160])
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        try:
+            data = json.loads(resp.text or "")
+        except Exception:
+            return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("error") and not data.get("emails"):
+        logger.debug("[GenericAPI] pickup messages error: %s", data.get("error"))
+        return None
+    items = [x for x in (data.get("emails") or []) if isinstance(x, dict)]
+    items.sort(key=_pickup_message_sort_key)
+    for item in reversed(items):
+        received_at = item.get("date") or item.get("receivedAt") or item.get("received_at")
+        msg_ts = _parse_generic_api_ts(received_at)
+        if after_ts and msg_ts and msg_ts + 2 < after_ts:
+            continue
+        subject = str(item.get("subject") or "")
+        preview = str(item.get("body_preview") or item.get("preview") or "")
+        code = _extract_pickup_otp(subject, preview)
+        msg_id = str(item.get("id") or "").strip()
+        detail = None
+        if msg_id:
+            detail_url = f"{origin}/pickup/{safe_token}/message/{quote(msg_id, safe='')}"
+            try:
+                detail_resp = session.get(
+                    detail_url,
+                    headers={**headers, "Accept": "application/json"},
+                    timeout=20,
+                    verify=False,
+                )
+            except Exception as exc:
+                logger.debug("[GenericAPI] pickup 邮件详情读取失败: %s: %s", type(exc).__name__, exc)
+                detail_resp = None
+            if detail_resp is not None and detail_resp.status_code in {200, 202}:
+                try:
+                    detail = detail_resp.json()
+                except Exception:
+                    try:
+                        detail = json.loads(detail_resp.text or "")
+                    except Exception:
+                        detail = None
+            if isinstance(detail, dict) and detail.get("ready"):
+                message = detail.get("message") if isinstance(detail.get("message"), dict) else {}
+                ready_code = str(message.get("verification_code") or "").strip()
+                if _CODE_REGEX.fullmatch(ready_code):
+                    code = ready_code
+                else:
+                    code = _extract_pickup_otp(
+                        str(message.get("subject") or subject),
+                        str(message.get("body") or ""),
+                        str(message.get("clean_body") or ""),
+                        str(message.get("html") or ""),
+                        preview,
+                    )
+            elif not code:
+                # 正文仍在异步加载，交给外层轮询，避免把取件页 CSS 色值当成验证码。
+                return None
+        if code:
+            return code, {
+                "source": "pickup_page",
+                "mail_id": msg_id,
+                "received_at": received_at,
+                "msg_ts": msg_ts,
+                "subject": subject,
+                "from": item.get("from") or item.get("fromAddress") or item.get("sender"),
+            }
+        return None
+    return None
 
 
 def _fetch_public_inbox_page_otp(
@@ -707,6 +850,7 @@ def _fetch_poll_payload(
     after_ts: float | None,
     is_yangyang: bool,
     public_inbox_api_url: str | None,
+    pickup_page: tuple[str, str] | None = None,
 ):
     """执行单次取码请求，网络路由由调用方指定。"""
     session = _new_http_session(proxy_url)
@@ -720,8 +864,14 @@ def _fetch_poll_payload(
         )
         if public_inbox_api_url else None
     )
-    page_result = yy_result or public_result
-    if page_result or is_yangyang or public_inbox_api_url:
+    pickup_result = (
+        _fetch_pickup_page_otp(
+            session, pickup_page[0], pickup_page[1], headers, after_ts=after_ts,
+        )
+        if pickup_page else None
+    )
+    page_result = pickup_result or yy_result or public_result
+    if page_result or is_yangyang or public_inbox_api_url or pickup_page:
         return page_result, yy_result, None, ""
     resp = session.get(poll_url, headers=headers, timeout=20, verify=False)
     return None, None, resp, resp.text or ""
@@ -764,14 +914,24 @@ def fetch_latest_otp(
     )
     is_yangyang = _parse_yangyang_code_url(account.code_url) is not None
     public_inbox_api_url = _public_inbox_page_api_url(account.code_url)
+    pickup_page = _parse_pickup_page_url(account.code_url)
     if public_inbox_api_url:
         logger.info(
             "[GenericAPI] 已识别公开收件页面，使用页面 inbox API: host=%s email=%s",
             urlparse(public_inbox_api_url).netloc,
             email,
         )
+    if pickup_page:
+        logger.info(
+            "[GenericAPI] 已识别异步取件页，使用 /pickup/{token}/messages: host=%s email=%s",
+            urlparse(pickup_page[0]).netloc,
+            email,
+        )
 
     selected_proxy = str(_proxy_cfg.pick_proxy() or "").strip()
+    if selected_proxy and _is_loopback_url(account.code_url):
+        logger.info("[GenericAPI] 取码地址是本机，跳过代理直连: %s", account.code_url.split("?", 1)[0])
+        selected_proxy = ""
     routes: list[tuple[str, str]] = []
     if selected_proxy:
         routes.append(("proxy", selected_proxy))
@@ -787,7 +947,10 @@ def fetch_latest_otp(
         attempt += 1
         try:
             # 不修改 yangyang 的路径型 URL；其列表接口本身按邮件 ID 返回数据。
-            base_poll_url = public_inbox_api_url or account.code_url
+            if pickup_page:
+                base_poll_url = f"{pickup_page[0]}/pickup/{quote(pickup_page[1], safe='')}/messages"
+            else:
+                base_poll_url = public_inbox_api_url or account.code_url
             poll_url = base_poll_url if is_yangyang else _cache_busted_url(base_poll_url, attempt)
             route_error: Exception | None = None
             page_result = yy_result = resp = None
@@ -802,6 +965,7 @@ def fetch_latest_otp(
                         after_ts=after_ts,
                         is_yangyang=is_yangyang,
                         public_inbox_api_url=public_inbox_api_url,
+                        pickup_page=pickup_page,
                     )
                     route_error = None
                     break
@@ -844,12 +1008,13 @@ def fetch_latest_otp(
                 resp = None
                 text = ""
             else:
-                if is_yangyang or public_inbox_api_url:
-                    last_error = (
-                        "yangyang 列表中尚未出现 after_ts 之后的新验证码邮件"
-                        if is_yangyang else
-                        "公开收件页面中尚未出现 after_ts 之后的新验证码邮件"
-                    )
+                if is_yangyang or public_inbox_api_url or pickup_page:
+                    if pickup_page:
+                        last_error = "取件页尚未出现 after_ts 之后的新验证码邮件，或正文仍在异步加载"
+                    elif is_yangyang:
+                        last_error = "yangyang 列表中尚未出现 after_ts 之后的新验证码邮件"
+                    else:
+                        last_error = "公开收件页面中尚未出现 after_ts 之后的新验证码邮件"
                     resp = None
                     text = ""
             if resp is None:
