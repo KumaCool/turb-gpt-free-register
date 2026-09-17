@@ -545,10 +545,29 @@ def _wait_for_email_input(driver, timeout: int | None = None):
     raise RuntimeError(f"找不到邮箱输入框/邮箱入口（未使用文字识别），state={last_state}")
 
 
+def _email_input_has_expected_value(driver, email: str) -> bool:
+    expected = str(email or "").strip().lower()
+    if not expected:
+        return False
+    state = _email_input_value_state(driver)
+    values = [str(i.get("value") or "") for i in (state.get("inputs") or [])]
+    return any(v.strip().lower() == expected for v in values)
+
+
+def _fill_email_on_element(driver, el, email: str) -> None:
+    """先逐字输入；React 重绘把字打丢时，对当前可见框走原生 setter。"""
+    _human_type_text(driver, el, email, clear=True)
+    if _email_input_has_expected_value(driver, email):
+        return
+    fresh = _find_visible_email_input_js(driver) or el
+    logger.warning("%s 逐字填写邮箱后值不完整，改用 React setter 回填", _log_prefix(driver))
+    _set_element_value(driver, fresh, email)
+
+
 def _type_email_address(driver, email: str, timeout: int | None = None) -> None:
     """进入邮箱登录/注册方式并填写邮箱。全程不依赖页面可见文字。"""
     el = _wait_for_email_input(driver, timeout=timeout)
-    _human_type_text(driver, el, email, clear=True)
+    _fill_email_on_element(driver, el, email)
 
 
 def _submit_nearest_form_for_active_input(driver) -> bool:
@@ -1028,6 +1047,7 @@ def _submit_email_and_wait_next(
 ) -> str:
     """填写并提交邮箱，必须确认进入 password/otp/logged_in 才返回。"""
     last_state = None
+    write_ok_once = False
     current_email = str(email or "").strip()
     for attempt in range(1, attempts + 1):
         if current_email:
@@ -1040,14 +1060,14 @@ def _submit_email_and_wait_next(
             current_email = str(email_supplier() or "").strip()
             if not current_email:
                 raise RuntimeError("邮箱分配器返回了空邮箱地址")
-            _human_type_text(driver, email_input, current_email, clear=True)
+            _fill_email_on_element(driver, email_input, current_email)
         state = _email_input_value_state(driver)
         last_state = state
-        values = [str(i.get("value") or "") for i in (state.get("inputs") or [])]
-        if not any(v.strip().lower() == current_email.lower() for v in values):
+        if not _email_input_has_expected_value(driver, current_email):
             logger.warning("%s 邮箱写入校验失败，准备重试：attempt=%s/%s state=%s", _log_prefix(driver), attempt, attempts, state)
             time.sleep(0.8)
             continue
+        write_ok_once = True
         logger.info("%s 已填写邮箱并校验通过：%s", _log_prefix(driver), current_email)
         human_delay("form")
         _submit_email_step(driver, current_email)
@@ -1060,6 +1080,8 @@ def _submit_email_and_wait_next(
             return state_name
         logger.warning("%s 邮箱提交后仍未进入下一步：%s，准备重填重试 state=%s", _log_prefix(driver), state_name, _email_input_value_state(driver))
         time.sleep(1.0)
+    if not write_ok_once:
+        raise RuntimeError(f"邮箱写入失败，最后状态={last_state}")
     raise RuntimeError(f"邮箱提交后未进入密码页/验证码页，最后状态={last_state}")
 
 

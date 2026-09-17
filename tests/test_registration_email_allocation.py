@@ -66,6 +66,48 @@ class DelayedEmailAllocationTests(unittest.TestCase):
             ["find_input", "acquire_email", "type_email", "submit_email"],
         )
 
+    def test_roxy_fill_email_falls_back_to_react_setter_when_typed_value_truncated(self):
+        email_input = object()
+        fresh_input = object()
+        calls = []
+
+        def typed_state(*args, **kwargs):
+            return {"inputs": [{"value": "m"}]}
+
+        def filled_state(*args, **kwargs):
+            return {"inputs": [{"value": "user@example.com"}]}
+
+        states = iter([typed_state(), filled_state(), filled_state()])
+
+        with patch.object(roxy, "_human_type_text", side_effect=lambda *a, **k: calls.append("type")), patch.object(
+            roxy,
+            "_email_input_value_state",
+            side_effect=lambda *a, **k: next(states),
+        ), patch.object(
+            roxy,
+            "_find_visible_email_input_js",
+            return_value=fresh_input,
+        ), patch.object(
+            roxy,
+            "_set_element_value",
+            side_effect=lambda driver, el, value: calls.append(("setter", el, value)),
+        ), patch.object(roxy, "_log_prefix", return_value="[test]"):
+            roxy._fill_email_on_element(object(), email_input, "user@example.com")
+
+        self.assertEqual(calls, ["type", ("setter", fresh_input, "user@example.com")])
+
+    def test_roxy_reports_write_failure_when_email_never_lands(self):
+        with patch.object(roxy, "_type_email_address"), patch.object(
+            roxy,
+            "_email_input_value_state",
+            return_value={"url": "https://chatgpt.com/auth/login", "inputs": [{"value": "m"}]},
+        ), patch.object(roxy, "_email_input_has_expected_value", return_value=False), patch.object(
+            roxy, "human_delay"
+        ), patch.object(roxy, "_check_manual_stop"), patch.object(roxy, "time") as mock_time:
+            mock_time.sleep = lambda *_a, **_k: None
+            with self.assertRaisesRegex(RuntimeError, r"^邮箱写入失败"):
+                roxy._submit_email_and_wait_next(object(), "user@example.com", attempts=2)
+
     def test_browser_use_finds_input_before_allocating_email(self):
         events = []
         email_input = object()
