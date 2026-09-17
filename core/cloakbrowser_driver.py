@@ -98,13 +98,20 @@ class CloakElement:
             except Exception:
                 self.page.keyboard.press("Control+A")
             return
+        if "\ue003" in text:
+            self.page.keyboard.press("Backspace")
+            return
+        if "\ue017" in text:
+            self.page.keyboard.press("Delete")
+            return
+        # send_keys 是追加输入。Playwright fill() 会整框覆盖，逐字调用时只剩最后一个字符。
         try:
-            if self.locator is not None:
-                self.locator.fill(text, timeout=10000)
-            else:
-                self.handle.fill(text, timeout=10000)
+            self.page.keyboard.type(text, delay=0)
         except Exception:
-            self.page.keyboard.type(text, delay=35)
+            if self.locator is not None:
+                self.locator.press_sequentially(text, timeout=10000)
+            else:
+                self.handle.type(text, delay=0)
 
     def get_attribute(self, name: str) -> str | None:
         try:
@@ -113,6 +120,14 @@ class CloakElement:
             return self.handle.get_attribute(name)
         except Exception:
             return None
+
+    @property
+    def text(self) -> str:
+        # Selenium WebElement.text；注册流程会读 btn.text。
+        try:
+            return str(self._eval("el => (el.innerText || el.textContent || '')") or "")
+        except Exception:
+            return ""
 
 
 class _SwitchTo:
@@ -250,15 +265,63 @@ class CloakSeleniumDriver:
         return first_el, cleaned
 
     @staticmethod
-    def _unwrap_js_result(page, handle: Any) -> Any:
+    def _js_handle_type(handle: Any) -> str:
         try:
-            element = handle.as_element()
+            return str(handle.evaluate(
+                "v => v === null || v === undefined ? String(v) : Array.isArray(v) ? 'array' : typeof v"
+            ) or "")
         except Exception:
-            element = None
-        if element is not None:
-            return CloakElement(page, handle=element)
+            return ""
+
+    @staticmethod
+    def _unwrap_js_result(page, handle: Any) -> Any:
+        return CloakSeleniumDriver._unwrap_js_handle(page, handle, dispose=True, depth=0)
+
+    @staticmethod
+    def _unwrap_js_handle(page, handle: Any, *, dispose: bool, depth: int) -> Any:
+        keep_handle = False
         try:
-            return handle.json_value()
+            try:
+                element = handle.as_element()
+            except Exception:
+                element = None
+            if element is not None:
+                keep_handle = True
+                return CloakElement(page, handle=element)
+
+            js_type = CloakSeleniumDriver._js_handle_type(handle)
+            if js_type in ("null", "undefined"):
+                return None
+            if js_type in ("boolean", "number", "string", "bigint"):
+                return handle.json_value()
+            if depth > 4:
+                try:
+                    return handle.json_value()
+                except Exception:
+                    return None
+            if js_type == "array":
+                length = int(handle.evaluate("v => v.length") or 0)
+                out = []
+                for i in range(min(length, 64)):
+                    child = handle.evaluate_handle("(v, i) => v[i]", i)
+                    out.append(CloakSeleniumDriver._unwrap_js_handle(page, child, dispose=True, depth=depth + 1))
+                return out
+            if js_type == "object":
+                keys = handle.evaluate("v => Object.keys(v)") or []
+                if not isinstance(keys, list) or len(keys) > 64:
+                    try:
+                        return handle.json_value()
+                    except Exception:
+                        return None
+                out = {}
+                for key in keys:
+                    child = handle.evaluate_handle("(v, k) => v[k]", key)
+                    out[key] = CloakSeleniumDriver._unwrap_js_handle(page, child, dispose=True, depth=depth + 1)
+                return out
+            try:
+                return handle.json_value()
+            except Exception:
+                return None
         except Exception as exc:
             msg = str(exc)
             if "Execution context was destroyed" in msg or "navigation" in msg.lower():
@@ -266,10 +329,11 @@ class CloakSeleniumDriver:
                 return {"ok": True, "reason": "navigation_after_script"}
             raise
         finally:
-            try:
-                handle.dispose()
-            except Exception:
-                pass
+            if dispose and not keep_handle:
+                try:
+                    handle.dispose()
+                except Exception:
+                    pass
 
     def _evaluate(self, script: str, args: tuple[Any, ...], async_mode: bool) -> Any:
         first_el, serial_args = self._serialize_args(args)
