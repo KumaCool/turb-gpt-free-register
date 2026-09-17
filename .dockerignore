@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+__pycache__
+.pytest_cache
+.venv
+*.pyc
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+logs
+run
+注册日志
