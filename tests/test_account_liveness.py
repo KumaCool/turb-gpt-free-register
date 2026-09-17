@@ -66,6 +66,33 @@ class AccountLivenessTests(unittest.TestCase):
     def setUp(self):
         _DummyBrowserSession.created = []
 
+    def test_login_warmup_opens_auth_login_as_first_visit(self):
+        session = MagicMock()
+        nav = MagicMock()
+        session.get.return_value = nav
+        session.get_chatgpt_navigate_headers.return_value = {
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+        }
+
+        with patch("core.chatgpt_bootstrap.anonymous_bootstrap"), \
+             patch.object(liveness, "get_providers"), \
+             patch.object(liveness, "probe_auth_session"), \
+             patch.object(liveness, "_clear_optional_bootstrap_circuit"):
+            liveness._warm_login_fingerprint_context(session)
+
+        session.get.assert_called_once()
+        url = session.get.call_args.args[0]
+        kwargs = session.get.call_args.kwargs
+        self.assertEqual(url, "https://chatgpt.com/auth/login")
+        session.get_chatgpt_navigate_headers.assert_called_once_with(
+            referer="", user_initiated=True,
+        )
+        self.assertEqual(kwargs["headers"]["sec-fetch-site"], "none")
+        self.assertEqual(kwargs["headers"]["sec-fetch-user"], "?1")
+        self.assertEqual(kwargs.get("timeout"), 12)
+        nav.raise_for_status.assert_called_once()
+
     def test_preflight_preserves_explicit_direct_route_and_skips_providers(self):
         with patch.object(liveness, "BrowserSession", _DummyBrowserSession), \
              patch.object(liveness, "_warm_login_fingerprint_context"), \
