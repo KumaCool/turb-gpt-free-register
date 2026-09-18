@@ -5926,6 +5926,8 @@ let CONFIG_EMAIL_ACTIVE_SECTION_V2 = '通用邮箱 / OTP';
 let CONFIG_SMS_ACTIVE_SECTION_V2 = '通用接码';
 let CONFIG_CODEX_ACTIVE_SECTION_V2 = '基础配置';
 const CONFIG_PENDING_UPDATES = {};
+let CLOAK_CHROMIUM_VERSIONS = null;
+let CLOAK_CHROMIUM_VERSIONS_LOADING = false;
 
 function configGroups() {
   const groups = {};
@@ -6234,6 +6236,104 @@ function renderConfigRecommendedLinks(f) {
   if (!items) return '';
   return `<div class="config-recommendations" role="note"><span class="config-recommendations-title">推荐家宽</span>${items}</div>`;
 }
+function getCloakConfigStr(key) {
+  const f = (CONFIG || []).find(x => x.key === key);
+  if (!f) return '';
+  const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, key) ? CONFIG_PENDING_UPDATES[key] : f.value;
+  return String(fv == null ? '' : fv).trim();
+}
+function cloakChromiumVersionChoices() {
+  const current = getCloakConfigStr('CLOAK_BROWSER_VERSION');
+  const rows = (CLOAK_CHROMIUM_VERSIONS && Array.isArray(CLOAK_CHROMIUM_VERSIONS.versions))
+    ? CLOAK_CHROMIUM_VERSIONS.versions.slice()
+    : [{ value: '', label: CLOAK_CHROMIUM_VERSIONS_LOADING ? '加载中…' : 'latest' }];
+  if (current && !rows.some(x => String(x.value) === current)) {
+    rows.push({ value: current, label: current });
+  }
+  return rows;
+}
+function cloakChromiumVersionLabel(value) {
+  const cur = String(value || '');
+  const hit = cloakChromiumVersionChoices().find(c => String(c.value) === cur);
+  if (hit) return String(hit.label || 'latest');
+  if (CLOAK_CHROMIUM_VERSIONS_LOADING) return '加载中…';
+  return cur || 'latest';
+}
+function setCloakBrowserVersionValue(value) {
+  CONFIG_PENDING_UPDATES.CLOAK_BROWSER_VERSION = String(value || '');
+  closeConfigEpSelects();
+  renderConfigLayoutV2();
+}
+function cloakReleaseChannelChoices() {
+  return [
+    { value: '', label: 'stable' },
+    { value: 'preview', label: 'preview' },
+  ];
+}
+function getCloakReleaseChannelValue() {
+  return getCloakConfigStr('CLOAK_RELEASE_CHANNEL').toLowerCase() === 'preview' ? 'preview' : '';
+}
+function setCloakReleaseChannelValue(value) {
+  CONFIG_PENDING_UPDATES.CLOAK_RELEASE_CHANNEL = String(value || '').toLowerCase() === 'preview' ? 'preview' : '';
+  closeConfigEpSelects();
+  renderConfigLayoutV2();
+}
+function renderCloakBrowserVersionField(f) {
+  const cur = getCloakConfigStr('CLOAK_BROWSER_VERSION');
+  const wrapId = 'configCloakVersionSelectV2';
+  const items = cloakChromiumVersionChoices().map(c => `
+    <button type="button" class="config-ep-select-item${String(c.value) === String(cur) ? ' is-active' : ''}" role="option" data-cloak-version-value="${attrEsc(c.value)}">${esc(c.label)}</button>
+  `).join('');
+  return `
+    <label class="fld config-select-v2-field">
+      ${esc(f.label)}
+      <span class="hint">${esc(f.help || '')}</span>
+      <div class="config-ep-select" id="${wrapId}">
+        <button type="button" class="config-ep-select-btn" data-ep-toggle="${wrapId}">${esc(cloakChromiumVersionLabel(cur))}</button>
+        <div class="config-ep-select-menu" role="listbox">${items}</div>
+        <input type="hidden" data-key="CLOAK_BROWSER_VERSION" value="${attrEsc(cur)}">
+      </div>
+    </label>
+  `;
+}
+function renderCloakReleaseChannelField(f) {
+  const cur = getCloakReleaseChannelValue();
+  const wrapId = 'configCloakChannelSelectV2';
+  const items = cloakReleaseChannelChoices().map(c => `
+    <button type="button" class="config-ep-select-item${c.value === cur ? ' is-active' : ''}" role="option" data-cloak-channel-value="${attrEsc(c.value)}">${esc(c.label)}</button>
+  `).join('');
+  return `
+    <label class="fld config-select-v2-field">
+      ${esc(f.label)}
+      <span class="hint">${esc(f.help || '')}</span>
+      <div class="config-ep-select" id="${wrapId}">
+        <button type="button" class="config-ep-select-btn" data-ep-toggle="${wrapId}">${esc(cur === 'preview' ? 'preview' : 'stable')}</button>
+        <div class="config-ep-select-menu" role="listbox">${items}</div>
+        <input type="hidden" data-key="CLOAK_RELEASE_CHANNEL" value="${attrEsc(cur)}">
+      </div>
+    </label>
+  `;
+}
+function renderConfigFieldV2(f) {
+  if (f.key === 'CLOAK_BROWSER_VERSION') return renderCloakBrowserVersionField(f);
+  if (f.key === 'CLOAK_RELEASE_CHANNEL') return renderCloakReleaseChannelField(f);
+  return renderConfigPlainFieldV2(f);
+}
+async function loadCloakChromiumVersions() {
+  if (CLOAK_CHROMIUM_VERSIONS_LOADING) return;
+  CLOAK_CHROMIUM_VERSIONS_LOADING = true;
+  renderConfigLayoutV2();
+  try {
+    CLOAK_CHROMIUM_VERSIONS = await api('/api/cloak/chromium-versions');
+  } catch (e) {
+    if (!CLOAK_CHROMIUM_VERSIONS) {
+      CLOAK_CHROMIUM_VERSIONS = { latest: '', versions: [{ value: '', label: 'latest' }] };
+    }
+  } finally {
+    CLOAK_CHROMIUM_VERSIONS_LOADING = false;
+    renderConfigLayoutV2();
+  }
+}
 function renderConfigPlainFieldV2(f) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   let control = '';
@@ -6271,7 +6371,7 @@ function renderMixedConfigSectionV2(name, fields, intro) {
       ${renderConfigSectionHead(name, intro || '')}
       ${extra}
       ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, { withIcon: false })).join('')}</div>` : ''}
-      ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
+      ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigFieldV2).join('')}</div>` : ''}
       <div class="config-section-v2-actions">
         <button type="button" class="btn primary" data-save-config-v2>保存</button>
       </div>
@@ -6671,6 +6771,20 @@ function bindConfigLayoutV2() {
         setCodexOauthDriverValue(oauthItem.dataset.codexOauthValue);
         return;
       }
+      const cloakVersionItem = e.target.closest('[data-cloak-version-value]');
+      if (cloakVersionItem) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCloakBrowserVersionValue(cloakVersionItem.getAttribute('data-cloak-version-value') || '');
+        return;
+      }
+      const cloakChannelItem = e.target.closest('[data-cloak-channel-value]');
+      if (cloakChannelItem) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCloakReleaseChannelValue(cloakChannelItem.getAttribute('data-cloak-channel-value') || '');
+        return;
+      }
     });
   }
   if (!document.documentElement.dataset.configEpCloseBound) {
@@ -6700,6 +6814,7 @@ async function loadConfig() {
     CONFIG = await api('/api/config');
     renderConfigLayoutV2();
     bindConfigLayoutV2();
+    loadCloakChromiumVersions();
   } catch(e) {
     showToast('加载配置失败: ' + e.message);
   }
