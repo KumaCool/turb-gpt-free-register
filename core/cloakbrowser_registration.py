@@ -162,12 +162,17 @@ def run_cloak_registration(
         except Exception as exc:
             codex_result = {"status": "failed", "ok": False, "message": f"{type(exc).__name__}: {str(exc)[:180]}"}
 
-        # 统计注册浏览器关闭前的完整会话；注册后停留期间的网络请求也计入。
+        # 停留期间页面继续发真实请求（含 SSE）。时间到了先入库，再停统计/关窗；
+        # 未完成请求不得 sizes() 死等，统计失败也不能挡账号保存。
         post_register_dwell(email, label="Cloak注册")
-        if traffic_tracker is not None:
-            network_traffic = traffic_tracker.stop()
-        if data_saver is not None:
-            data_saver.stop()
+        extra = {
+            "user": session_info.get("user"),
+            "account": session_info.get("account"),
+            "expires": session_info.get("expires"),
+            "cloakbrowser": {"profile_id": opened.profile_id, "open_result": opened.raw},
+            "registration_password": openai_password,
+            "codex": codex_result,
+        }
         account_id = save_account_data(
             email=email,
             access_token=access_token,
@@ -175,16 +180,43 @@ def run_cloak_registration(
             email_source=resolve_email_source(email),
             proxy_used=((opened.raw or {}).get("proxy") if opened else None) or proxy or None,
             batch_dir=batch_dir,
-            extra={
-                "user": session_info.get("user"),
-                "account": session_info.get("account"),
-                "expires": session_info.get("expires"),
-                "cloakbrowser": {"profile_id": opened.profile_id, "open_result": opened.raw},
-                "registration_password": openai_password,
-                "codex": codex_result,
-                "network_traffic": network_traffic,
-            },
+            extra=extra,
         )
+        if traffic_tracker is not None:
+            try:
+                network_traffic = traffic_tracker.stop()
+            except Exception as exc:
+                logger.warning(
+                    "[Cloak注册] 流量统计结束失败，账号已入库：%s: %s",
+                    type(exc).__name__,
+                    str(exc)[:180],
+                )
+        if data_saver is not None:
+            try:
+                data_saver.stop()
+            except Exception as exc:
+                logger.warning(
+                    "[Cloak注册] 省流量拦截结束失败，账号已入库：%s: %s",
+                    type(exc).__name__,
+                    str(exc)[:180],
+                )
+        if network_traffic is not None:
+            extra["network_traffic"] = network_traffic
+            try:
+                save_account_data(
+                    email=email,
+                    access_token=access_token,
+                    totp_secret=totp_secret,
+                    email_source=resolve_email_source(email),
+                    proxy_used=((opened.raw or {}).get("proxy") if opened else None) or proxy or None,
+                    extra=extra,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Cloak注册] 流量统计未能写回账号 extra：%s: %s",
+                    type(exc).__name__,
+                    str(exc)[:180],
+                )
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
         return {
             "success": bool(codex_ok),
@@ -203,7 +235,10 @@ def run_cloak_registration(
             except Exception:
                 pass
         if data_saver is not None:
-            data_saver.stop()
+            try:
+                data_saver.stop()
+            except Exception:
+                pass
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Cloak注册] 失败详情", exc_info=True)
         try:
@@ -226,7 +261,10 @@ def run_cloak_registration(
             except Exception:
                 pass
         if data_saver is not None:
-            data_saver.stop()
+            try:
+                data_saver.stop()
+            except Exception:
+                pass
         if driver and not bool(_cfg.CLOAK_KEEP_BROWSER_OPEN):
             try:
                 driver.quit()

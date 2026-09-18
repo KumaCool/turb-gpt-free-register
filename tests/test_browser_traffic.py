@@ -51,6 +51,25 @@ class _DetailedRequest(_Request):
         return _Response()
 
 
+class _UnfinishedRequest(_Request):
+    resource_type = "xhr"
+    url = "https://chatgpt.com/backend-api/conversation"
+    headers = {"accept": "text/event-stream"}
+    post_data = None
+
+    def __init__(self):
+        self.sizes_called = 0
+        self.response_called = 0
+
+    def sizes(self):
+        self.sizes_called += 1
+        raise AssertionError("Request.sizes() must not be called for unfinished requests")
+
+    def response(self):
+        self.response_called += 1
+        raise AssertionError("Request.response() must not be called for unfinished requests")
+
+
 class _FailedRequest(_Request):
     resource_type = "document"
     url = "https://chatgpt.com/auth/login"
@@ -325,6 +344,21 @@ class BrowserTrafficTests(unittest.TestCase):
         self.assertEqual(result["http_download_bytes"], 0)
         self.assertGreater(result["http_upload_bytes"], 0)
         self.assertEqual(result["detail_recorded_count"], 1)
+
+    def test_playwright_unfinished_requests_do_not_wait_on_sizes(self):
+        context = _Emitter()
+        context.pages = []
+        tracker = PlaywrightTrafficTracker(context, label="unfinished")
+        request = _UnfinishedRequest()
+        context.emit("request", request)
+        result = tracker.stop()
+
+        self.assertEqual(request.sizes_called, 0)
+        self.assertEqual(request.response_called, 0)
+        self.assertEqual(result["request_count"], 1)
+        self.assertEqual(result["unfinished_request_count"], 1)
+        self.assertEqual(result["completed_request_count"], 0)
+        self.assertEqual(result["http_download_bytes"], 0)
 
     def test_selenium_logs_status_cache_failure_and_unfinished_details(self):
         entries = [
