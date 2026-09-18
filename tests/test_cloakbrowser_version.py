@@ -15,8 +15,10 @@ class CloakVersionCatalogTests(unittest.TestCase):
         with patch.object(versions, "fetch_pro_latest", return_value="151.0.7922.108.6"), \
              patch.object(versions, "fetch_github_releases", return_value=[
                  {"version": "151.0.7922.108.6", "pro": True},
+                 {"version": "151.0.7922.108.4", "pro": True},
                  {"version": "146.0.7680.177.5", "pro": False},
                  {"version": "150.0.7871.114.6", "pro": True},
+                 {"version": "150.0.7871.114.2", "pro": True},
              ]), \
              patch.object(versions, "list_cached_binaries", return_value=[
                  {"version": "151.0.7922.108.6", "pro": True},
@@ -30,9 +32,12 @@ class CloakVersionCatalogTests(unittest.TestCase):
         values = [row["value"] for row in payload["versions"]]
         self.assertEqual(values[0], "")
         self.assertIn("151.0.7922.108.6", values)
+        self.assertNotIn("151.0.7922.108.4", values)
         self.assertIn("150.0.7871.114.6", values)
+        self.assertNotIn("150.0.7871.114.2", values)
         self.assertIn("146.0.7680.177.5", values)
         self.assertIn("145.0.7632.159.7", values)
+        self.assertEqual(len([v for v in values if v]), 4)
         labels = {row["value"]: row["label"] for row in payload["versions"]}
         self.assertIn("Pro", labels["151.0.7922.108.6"])
         self.assertIn("免费", labels["146.0.7680.177.5"])
@@ -46,6 +51,21 @@ class CloakVersionCatalogTests(unittest.TestCase):
         self.assertEqual(payload["versions"][0]["value"], "")
         self.assertTrue(payload["versions"][0]["label"].startswith("latest"))
         self.assertTrue(payload["errors"])
+
+    def test_stale_current_pin_keeps_its_major_slot(self):
+        with patch.object(versions, "fetch_pro_latest", return_value="151.0.7922.108.6"), \
+             patch.object(versions, "fetch_github_releases", return_value=[
+                 {"version": "151.0.7922.108.6", "pro": True},
+                 {"version": "151.0.7922.108.4", "pro": True},
+             ]), \
+             patch.object(versions, "list_cached_binaries", return_value=[]):
+            payload = versions.list_chromium_versions(
+                current="151.0.7922.108.4",
+                license_key="pro-key",
+            )
+        values = [row["value"] for row in payload["versions"] if row["value"]]
+        self.assertEqual(values, ["151.0.7922.108.4"])
+        self.assertNotIn("151.0.7922.108.6", values)
 
 
 class CloakDriverVersionKwargsTests(unittest.TestCase):

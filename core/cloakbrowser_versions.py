@@ -183,7 +183,25 @@ def list_chromium_versions(*, current: str = "", license_key: str = "", channel:
             if latest:
                 add(latest, source="bundled")
 
-    ranked = sorted(items.values(), key=lambda row: _version_key(row["value"]), reverse=True)
+    by_major: dict[int, dict] = {}
+    for row in items.values():
+        major = _version_key(row["value"])[0]
+        prev = by_major.get(major)
+        if prev is None or _version_key(row["value"]) > _version_key(prev["value"]):
+            by_major[major] = row
+        elif prev is not None and _version_key(row["value"]) == _version_key(prev["value"]):
+            if row.get("pro"):
+                prev["pro"] = True
+            for source in row.get("sources") or []:
+                if source not in prev["sources"]:
+                    prev["sources"].append(source)
+    if current and is_full_chromium_version(current):
+        current_major = _version_key(current)[0]
+        kept = by_major.get(current_major)
+        if kept is None or kept["value"] != current:
+            by_major[current_major] = items[current]
+
+    ranked = sorted(by_major.values(), key=lambda row: _version_key(row["value"]), reverse=True)
     latest_label = f"latest ({latest})" if latest else "latest"
     versions = [{"value": "", "label": latest_label}]
     for row in ranked:

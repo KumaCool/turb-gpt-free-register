@@ -50,7 +50,9 @@ WebUI：CloakBrowser 分组，放在 `CLOAK_LICENSE_KEY` 后面。保存走现�
 
 打开配置页时请求 `GET /api/cloak/chromium-versions`，失败不挡配置页。
 
-清单合并去重、按版本号降序：
+清单合并去重后，**每个 Chromium 大版本只保留一项**（该大版本完整号最高的一条，例如 151 只留 `151.0.7922.108.6`，不列 `.4/.3/.2`）。再按版本号降序。
+
+来源仍是：
 
 1. Pro latest（有 License 时请求 version API；无 License 则跳过）。
 2. GitHub releases：`tag_name` 形如 `chromium-v*`，去掉前缀和可选 `-pro` 后缀，得到完整号。
