@@ -16,7 +16,6 @@ class CloakVersionCatalogTests(unittest.TestCase):
              patch.object(versions, "fetch_github_releases", return_value=[
                  {"version": "151.0.7922.108.6", "pro": True},
                  {"version": "151.0.7922.108.4", "pro": True},
-                 {"version": "146.0.7680.177.5", "pro": False},
                  {"version": "150.0.7871.114.6", "pro": True},
                  {"version": "150.0.7871.114.2", "pro": True},
              ]), \
@@ -35,12 +34,69 @@ class CloakVersionCatalogTests(unittest.TestCase):
         self.assertNotIn("151.0.7922.108.4", values)
         self.assertIn("150.0.7871.114.6", values)
         self.assertNotIn("150.0.7871.114.2", values)
-        self.assertIn("146.0.7680.177.5", values)
         self.assertIn("145.0.7632.159.7", values)
-        self.assertEqual(len([v for v in values if v]), 4)
+        self.assertEqual(len([v for v in values if v]), 3)
         labels = {row["value"]: row["label"] for row in payload["versions"]}
         self.assertIn("Pro", labels["151.0.7922.108.6"])
-        self.assertIn("免费", labels["146.0.7680.177.5"])
+        self.assertIn("不可用", labels["145.0.7632.159.7"])
+
+    def test_github_free_without_platform_asset_is_excluded(self):
+        with patch.object(versions, "_platform_tag", return_value="linux-arm64"), \
+             patch.object(versions, "_http_get_json", return_value=[
+                 {
+                     "draft": False,
+                     "tag_name": "chromium-v146.0.7680.177.5",
+                     "assets": [{"name": "cloakbrowser-linux-x64.tar.gz"}],
+                 },
+                 {
+                     "draft": False,
+                     "tag_name": "chromium-v146.0.7680.177.3",
+                     "assets": [{"name": "cloakbrowser-linux-arm64.tar.gz"}],
+                 },
+                 {
+                     "draft": False,
+                     "tag_name": "chromium-v151.0.7922.108.6-pro",
+                     "assets": [],
+                 },
+             ]):
+            rows = versions.fetch_github_releases()
+        versions_by_key = {(row["version"], row["pro"]): row for row in rows}
+        self.assertNotIn(("146.0.7680.177.5", False), versions_by_key)
+        self.assertIn(("146.0.7680.177.3", False), versions_by_key)
+        self.assertIn(("151.0.7922.108.6", True), versions_by_key)
+
+    def test_licensed_catalog_hides_free_github_and_marks_stale_pin(self):
+        with patch.object(versions, "fetch_pro_latest", return_value="151.0.7922.108.6"), \
+             patch.object(versions, "fetch_github_releases", return_value=[
+                 {"version": "151.0.7922.108.6", "pro": True},
+                 {"version": "146.0.7680.177.3", "pro": False},
+             ]), \
+             patch.object(versions, "list_cached_binaries", return_value=[]):
+            payload = versions.list_chromium_versions(
+                current="146.0.7680.177.5",
+                license_key="pro-key",
+            )
+        values = [row["value"] for row in payload["versions"]]
+        self.assertIn("151.0.7922.108.6", values)
+        self.assertNotIn("146.0.7680.177.3", values)
+        self.assertIn("146.0.7680.177.5", values)
+        labels = {row["value"]: row["label"] for row in payload["versions"]}
+        self.assertIn("不可用", labels["146.0.7680.177.5"])
+        self.assertIn("Pro", labels["151.0.7922.108.6"])
+
+    def test_unlicensed_catalog_keeps_free_with_platform_asset(self):
+        with patch.object(versions, "fetch_pro_latest", side_effect=AssertionError("should not call")), \
+             patch.object(versions, "fetch_github_releases", return_value=[
+                 {"version": "146.0.7680.177.3", "pro": False},
+                 {"version": "151.0.7922.108.6", "pro": True},
+             ]), \
+             patch.object(versions, "list_cached_binaries", return_value=[]):
+            payload = versions.list_chromium_versions(license_key="")
+        values = [row["value"] for row in payload["versions"]]
+        self.assertIn("146.0.7680.177.3", values)
+        self.assertNotIn("151.0.7922.108.6", values)
+        labels = {row["value"]: row["label"] for row in payload["versions"]}
+        self.assertIn("免费", labels["146.0.7680.177.3"])
 
     def test_remote_failures_still_return_latest_row(self):
         with patch.object(versions, "fetch_pro_latest", side_effect=RuntimeError("down")), \

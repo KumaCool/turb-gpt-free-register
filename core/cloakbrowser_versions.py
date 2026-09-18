@@ -38,10 +38,14 @@ def _http_get_json(url: str, *, params: dict | None = None, headers: dict | None
 
 def _platform_tag() -> str:
     try:
-        from cloakbrowser.download import get_platform_tag
+        from cloakbrowser.config import get_platform_tag
         return str(get_platform_tag() or "")
     except Exception:
-        return ""
+        try:
+            from cloakbrowser.download import get_platform_tag as download_get_platform_tag
+            return str(download_get_platform_tag() or "")
+        except Exception:
+            return ""
 
 
 def _cache_dir() -> Path | None:
@@ -57,6 +61,13 @@ def _cache_dir() -> Path | None:
 
 
 def _bundled_chromium_version() -> str:
+    try:
+        from cloakbrowser.config import get_chromium_version
+        value = str(get_chromium_version() or "").strip()
+        if is_full_chromium_version(value):
+            return value
+    except Exception:
+        pass
     try:
         from cloakbrowser.config import CHROMIUM_VERSION
         value = str(CHROMIUM_VERSION or "").strip()
@@ -82,12 +93,33 @@ def fetch_pro_latest(channel: str = "stable") -> str | None:
     return version if is_full_chromium_version(version) else None
 
 
+def _platform_asset_name(platform_tag: str | None = None) -> str:
+    tag = str(platform_tag or _platform_tag() or "").strip()
+    return f"cloakbrowser-{tag}.tar.gz" if tag else ""
+
+
+def _release_has_platform_asset(rel: dict, asset_name: str) -> bool:
+    if not asset_name:
+        return False
+    assets = rel.get("assets") or []
+    if not isinstance(assets, list):
+        return False
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        if name == asset_name:
+            return True
+    return False
+
+
 def fetch_github_releases() -> list[dict]:
     data = _http_get_json(GITHUB_API_URL, params={"per_page": 100})
     if not isinstance(data, list):
         return []
     out: list[dict] = []
     seen: set[str] = set()
+    asset_name = _platform_asset_name()
     for rel in data:
         if rel.get("draft"):
             continue
@@ -96,11 +128,14 @@ def fetch_github_releases() -> list[dict]:
         if not matched:
             continue
         version = matched.group(1)
-        key = f"{version}:{'pro' if tag.endswith('-pro') else 'free'}"
+        is_pro = tag.endswith("-pro")
+        if not is_pro and not _release_has_platform_asset(rel, asset_name):
+            continue
+        key = f"{version}:{'pro' if is_pro else 'free'}"
         if key in seen:
             continue
         seen.add(key)
-        out.append({"version": version, "pro": tag.endswith("-pro")})
+        out.append({"version": version, "pro": is_pro, "has_platform_asset": (not is_pro)})
     return out
 
 
@@ -119,12 +154,28 @@ def list_cached_binaries() -> list[dict]:
     return out
 
 
-def _row_label(row: dict) -> str:
+def _row_is_runnable(row: dict, *, has_license: bool) -> bool:
+    sources = set(row.get("sources") or [])
+    if has_license:
+        return bool(row.get("pro"))
+    if row.get("pro") and "cache" not in sources:
+        return False
+    if sources & {"github", "cache"}:
+        return True
+    if "bundled" in sources:
+        return True
+    return False
+
+
+def _row_label(row: dict, *, has_license: bool) -> str:
     version = str(row.get("value") or "")
+    runnable = _row_is_runnable(row, has_license=has_license)
+    if not runnable:
+        return f"{version} · 不可用"
     if row.get("pro"):
         return f"{version} · Pro"
     sources = set(row.get("sources") or [])
-    if sources & {"github", "cache"}:
+    if sources & {"github", "cache", "bundled"}:
         return f"{version} · 免费"
     return version
 
@@ -144,9 +195,10 @@ def list_chromium_versions(*, current: str = "", license_key: str = "", channel:
         if source and source not in row["sources"]:
             row["sources"].append(source)
 
+    has_license = bool(str(license_key or "").strip())
     latest = ""
     requested_channel = "preview" if str(channel or "").strip().lower() == "preview" else "stable"
-    if str(license_key or "").strip():
+    if has_license:
         try:
             latest = fetch_pro_latest(requested_channel) or ""
             if latest:
@@ -174,8 +226,11 @@ def list_chromium_versions(*, current: str = "", license_key: str = "", channel:
         add(current, source="current")
 
     if not latest:
-        free_versions = [version for version, row in items.items() if not row.get("pro")]
-        pool = free_versions or list(items)
+        runnable = [
+            version for version, row in items.items()
+            if _row_is_runnable(row, has_license=has_license)
+        ]
+        pool = runnable or []
         if pool:
             latest = max(pool, key=_version_key)
         else:
@@ -185,6 +240,8 @@ def list_chromium_versions(*, current: str = "", license_key: str = "", channel:
 
     by_major: dict[int, dict] = {}
     for row in items.values():
+        if not _row_is_runnable(row, has_license=has_license):
+            continue
         major = _version_key(row["value"])[0]
         prev = by_major.get(major)
         if prev is None or _version_key(row["value"]) > _version_key(prev["value"]):
@@ -205,5 +262,5 @@ def list_chromium_versions(*, current: str = "", license_key: str = "", channel:
     latest_label = f"latest ({latest})" if latest else "latest"
     versions = [{"value": "", "label": latest_label}]
     for row in ranked:
-        versions.append({"value": row["value"], "label": _row_label(row)})
+        versions.append({"value": row["value"], "label": _row_label(row, has_license=has_license)})
     return {"latest": latest, "versions": versions, "errors": errors}

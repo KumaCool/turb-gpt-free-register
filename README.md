@@ -435,7 +435,7 @@ CLOAK_USER_DATA_DIR = ""        # 留空临时环境；填路径可持久化 pro
 
 说明：
 
-- WebUI「本地指纹浏览器」分组可用下拉选择 `CLOAK_BROWSER_VERSION`（`latest (当前号)` 或完整内核号）和 `CLOAK_RELEASE_CHANNEL`（stable/preview）。
+- WebUI「本地指纹浏览器」分组可用下拉选择 `CLOAK_BROWSER_VERSION`（`latest (当前号)` 或完整内核号）和 `CLOAK_RELEASE_CHANNEL`（stable/preview）。免费号必须带当前平台包才进下拉；没有 `linux-arm64` 包的版本（例如 `146.0.7680.177.5`）不会再标成可跑。已保存但不存在的钉仍保留，文案为「不可用」。有 License 时只把 Pro 号当可跑项。
 - `CLOAK_GEOIP=True` 会按当前出口 IP 自动生成 `locale / timezone / Accept-Language`，并传给 CloakBrowser 与 Playwright context。
 - 如果你通过项目代理池使用代理，请在 `config/proxy.py` 的 `PROXY_POOL` 填写代理；如果你使用系统代理/VPN，也会按当前实际出口 IP 自动定位。
 - 免费版没有在项目侧限制窗口数；本项目每个注册任务会启动一个 CloakBrowser 实例，即一个实例一套指纹。

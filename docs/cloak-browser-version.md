@@ -29,7 +29,7 @@
 - 钉版本正则：`^[0-9]+(?:\.[0-9]+){3,4}$`。只接受完整数字版本；`151` 非法。
 - Pro latest：`GET https://cloakbrowser.dev/api/download/version` → `{"version":"151.0.7922.108.6"}`。preview 同接口 `?channel=preview` → `152.0.7977.82.1`。
 - Pro 历史包：`GET https://cloakbrowser.dev/api/download/{version}`（要 License）。GitHub 上 `chromium-v*-pro` 标签只有校验和，没有平台包，不能当下载源，但标签号可当「曾发布过的 Pro 版本」。
-- 免费历史包：GitHub `CloakHQ/cloakbrowser` releases，`chromium-v*` 且带当前平台资产（本机 `linux-arm64` → `cloakbrowser-linux-arm64.tar.gz`）。免费 License 会丢掉版本钉、强制 latest。
+- 免费历史包：GitHub `CloakHQ/cloakbrowser` releases，`chromium-v*` 且带当前平台资产（本机 `linux-arm64` → `cloakbrowser-linux-arm64.tar.gz`）。只看标签、不看资产会把没有 linux-arm64 包的号（现场：`146.0.7680.177.5`）标成「免费」可选，启动 404。免费 License 会丢掉版本钉、强制 latest。
 - 本仓库 `build_cloak_driver` 未传 version/channel。配置页普通字段只有 text/number/textarea/bool，下拉要走现成 `config-ep-select`（与注册驱动相同）。
 - Cloak 启动点两处，都走 `build_cloak_driver`：注册、Codex OAuth。
 
@@ -55,9 +55,12 @@ WebUI：CloakBrowser 分组，放在 `CLOAK_LICENSE_KEY` 后面。保存走现�
 来源仍是：
 
 1. Pro latest（有 License 时请求 version API；无 License 则跳过）。
-2. GitHub releases：`tag_name` 形如 `chromium-v*`，去掉前缀和可选 `-pro` 后缀，得到完整号。
+2. GitHub releases：`tag_name` 形如 `chromium-v*`，去掉前缀和可选 `-pro` 后缀，得到完整号。**免费标签必须带当前平台资产** `cloakbrowser-<platform>.tar.gz`（本机 `linux-arm64`）才进下拉；没有该包的号不列。Pro 标签（`-pro`）本身没有平台包，不能当免费下载源；有 License 时只作 Pro 可选号。
 3. 本机已缓存目录名（`~/.cloakbrowser/chromium-<ver>` / `chromium-<ver>-pro`）。
-4. 当前已保存的 `CLOAK_BROWSER_VERSION`（若不在清单里，仍插进去，避免下拉把旧钉弄丢）。
+4. 包内捆绑号（`CHROMIUM_VERSION`）同样：当前平台下不到就不列。
+5. 当前已保存的 `CLOAK_BROWSER_VERSION`（若不在清单里，仍插进去，避免下拉把旧钉弄丢）。**不可用的已保存钉标「不可用」**，不当正常可选项。
+
+有 License 时：免费号不要标成可跑；Pro 走对方下载接口，不走这个 GitHub 免费 404 路径。无 License 时：只列当前平台有免费包或已缓存免费核的号。
 
 第一项固定：
 
@@ -67,7 +70,7 @@ WebUI：CloakBrowser 分组，放在 `CLOAK_LICENSE_KEY` 后面。保存走现�
 其余项：
 
 - value = 完整版本号
-- 文案 = 版本号；能区分时加 `Pro` / `免费` 标记（GitHub `-pro` 标签或本地 `-pro` 目录算 Pro）。
+- 文案 = 版本号；能区分时加 `Pro` / `免费` 标记（GitHub `-pro` 标签或本地 `-pro` 目录算 Pro）。当前平台没有对应包、或有 License 却只是免费号的已保存钉：文案加 `不可用`。
 
 不把 preview latest 单独叫 latest。preview 号若出现在 GitHub/缓存里，作为普通版本可选；选 latest 再把通道设为 preview，才跟 preview 最新走。
 
@@ -109,7 +112,7 @@ WebUI：CloakBrowser 分组，放在 `CLOAK_LICENSE_KEY` 后面。保存走现�
 
 交付物：`config/cloakbrowser.py`、`webui/config_editor.py`、清单模块、`GET /api/cloak/chromium-versions`。
 
-验收：接口 JSON 含 `latest`、`versions`（每项 `value`/`label`）；第一项 value 为空、label 含 `latest (` 和探测到的号；GitHub/Pro 失败时仍 200，versions 至少有 latest；已保存但不在远程清单的版本仍出现。不启动浏览器、不改入口。
+验收：接口 JSON 含 `latest`、`versions`（每项 `value`/`label`）；第一项 value 为空、label 含 `latest (` 和探测到的号；GitHub/Pro 失败时仍 200，versions 至少有 latest；已保存但不在远程清单的版本仍出现。GitHub 免费标签没有当前平台 `cloakbrowser-*.tar.gz` 的不进下拉；有 License 时免费号不标可跑，已保存不可用钉标「不可用」。不启动浏览器、不改入口。
 
 ### T02 配置页下拉
 
