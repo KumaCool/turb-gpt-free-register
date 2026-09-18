@@ -500,13 +500,20 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
     license_key = str(getattr(_cfg, "CLOAK_LICENSE_KEY", "") or "").strip()
     if license_key:
         opts["license_key"] = license_key
+    browser_version = str(getattr(_cfg, "CLOAK_BROWSER_VERSION", "") or "").strip()
+    release_channel = str(getattr(_cfg, "CLOAK_RELEASE_CHANNEL", "") or "").strip()
+    if browser_version:
+        opts["browser_version"] = browser_version
+    if release_channel:
+        opts["release_channel"] = release_channel
 
     user_data_dir = str(getattr(_cfg, "CLOAK_USER_DATA_DIR", "") or "").strip()
     logger.info(
-        "[Cloak] 启动 CloakBrowser：headless=%s humanize=%s geoip=%s proxy=%s locale=%s timezone=%s accept_language=%s persistent=%s",
+        "[Cloak] 启动 CloakBrowser：headless=%s humanize=%s geoip=%s proxy=%s locale=%s timezone=%s accept_language=%s kernel=%s channel=%s persistent=%s",
         opts.get("headless"), opts.get("humanize"), opts.get("geoip"),
         proxy_url or "无", opts.get("locale") or "自动/默认", opts.get("timezone") or "自动/默认",
-        locale_opts.get("accept_language") or "自动/默认", bool(user_data_dir),
+        locale_opts.get("accept_language") or "自动/默认",
+        browser_version or "latest", release_channel or "stable", bool(user_data_dir),
     )
     context_kwargs = {}
     if locale_opts.get("locale"):
