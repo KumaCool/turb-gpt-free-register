@@ -2839,6 +2839,27 @@ def create_app(auth_code: str | None = None) -> Flask:
             logger.exception("获取 Roxy 团队/工作区失败")
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
+    @app.get("/api/cloak/chromium-versions")
+    def api_cloak_chromium_versions():
+        try:
+            from config import cloakbrowser as cloak_cfg
+            from core.cloakbrowser_versions import list_chromium_versions
+            payload = list_chromium_versions(
+                current=str(getattr(cloak_cfg, "CLOAK_BROWSER_VERSION", "") or ""),
+                license_key=str(getattr(cloak_cfg, "CLOAK_LICENSE_KEY", "") or ""),
+                channel=str(getattr(cloak_cfg, "CLOAK_RELEASE_CHANNEL", "") or ""),
+            )
+            payload["ok"] = True
+            return jsonify(payload)
+        except Exception as exc:
+            logger.exception("获取 Cloak 内核清单失败")
+            return jsonify({
+                "ok": True,
+                "latest": "",
+                "versions": [{"value": "", "label": "latest"}],
+                "errors": [f"{type(exc).__name__}: {exc}"],
+            })
+
     # ----------------------------------------------------------
     # 配置读写
     # ----------------------------------------------------------

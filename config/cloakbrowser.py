@@ -22,6 +22,12 @@ CLOAK_USE_PROXY: bool = True
 # Pro license；留空则使用免费 binary。
 CLOAK_LICENSE_KEY: str = ""
 
+# Cloak Chromium 内核。空=latest；钉死须完整号，如 151.0.7922.108.6。
+CLOAK_BROWSER_VERSION: str = ""
+
+# 发布通道。空/stable=稳定；preview=预览。仅未钉内核、走 latest 时生效。
+CLOAK_RELEASE_CHANNEL: str = ""
+
 # 固定指纹 seed；留空则每次 launch 随机生成新指纹。
 CLOAK_FINGERPRINT_SEED: str = ""
 
@@ -38,4 +44,4 @@ CLOAK_SELENIUM_TIMEOUT: int = 90
 CLOAK_KEEP_BROWSER_OPEN: bool = False
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'CLOAK_HEADLESS': 'bool', 'CLOAK_HUMANIZE': 'bool', 'CLOAK_GEOIP': 'bool', 'CLOAK_LOCALE': 'str', 'CLOAK_TIMEZONE': 'str', 'CLOAK_USE_PROXY': 'bool', 'CLOAK_LICENSE_KEY': 'str', 'CLOAK_FINGERPRINT_SEED': 'str', 'CLOAK_USER_DATA_DIR': 'str', 'CLOAK_SELENIUM_TIMEOUT': 'int', 'CLOAK_KEEP_BROWSER_OPEN': 'bool'})
+apply_env_overrides(globals(), {'CLOAK_HEADLESS': 'bool', 'CLOAK_HUMANIZE': 'bool', 'CLOAK_GEOIP': 'bool', 'CLOAK_LOCALE': 'str', 'CLOAK_TIMEZONE': 'str', 'CLOAK_USE_PROXY': 'bool', 'CLOAK_LICENSE_KEY': 'str', 'CLOAK_BROWSER_VERSION': 'str', 'CLOAK_RELEASE_CHANNEL': 'str', 'CLOAK_FINGERPRINT_SEED': 'str', 'CLOAK_USER_DATA_DIR': 'str', 'CLOAK_SELENIUM_TIMEOUT': 'int', 'CLOAK_KEEP_BROWSER_OPEN': 'bool'})

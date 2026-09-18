@@ -86,6 +86,14 @@ EDITABLE_FIELDS = [
         "label": "Cloak License", "help": "Pro license；留空使用免费 binary",
     },
     {
+        "key": "CLOAK_BROWSER_VERSION", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
+        "label": "Cloak内核版本", "help": "选 latest 跟随当前最新；选具体完整号则钉死，下次启动生效",
+    },
+    {
+        "key": "CLOAK_RELEASE_CHANNEL", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
+        "label": "Cloak发布通道", "help": "仅 latest 时生效。stable 为稳定通道；preview 为预览通道",
+    },
+    {
         "key": "CLOAK_FINGERPRINT_SEED", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
         "label": "Cloak指纹Seed", "help": "留空每次随机；固定值可保持同一指纹",
     },
