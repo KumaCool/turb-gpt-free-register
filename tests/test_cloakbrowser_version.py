@@ -100,6 +100,21 @@ class CloakVersionCatalogTests(unittest.TestCase):
         labels = {row["value"]: row["label"] for row in payload["versions"]}
         self.assertIn("免费", labels["146.0.7680.177.3"])
 
+    def test_latest_is_newest_known_not_runnable_free(self):
+        with patch.object(versions, "fetch_pro_latest", side_effect=RuntimeError("down")), \
+             patch.object(versions, "fetch_github_releases", return_value=[
+                 {"version": "151.0.7922.108.6", "pro": True},
+                 {"version": "146.0.7680.177.3", "pro": False},
+             ]), \
+             patch.object(versions, "list_cached_binaries", return_value=[]), \
+             patch.object(versions, "_bundled_chromium_version", return_value="146.0.7680.177.3"):
+            payload = versions.list_chromium_versions(license_key="")
+        self.assertEqual(payload["latest"], "151.0.7922.108.6")
+        self.assertEqual(payload["versions"][0]["label"], "latest (151.0.7922.108.6)")
+        values = [row["value"] for row in payload["versions"]]
+        self.assertIn("146.0.7680.177.3", values)
+        self.assertNotIn("151.0.7922.108.6", values)
+
     def test_resolve_launch_version_uses_detected_latest(self):
         with patch.object(versions, "list_chromium_versions", return_value={"latest": "151.0.7922.108.6"}):
             self.assertEqual(
@@ -118,7 +133,8 @@ class CloakVersionCatalogTests(unittest.TestCase):
              patch.object(versions, "_bundled_chromium_version", return_value="146.0.7680.177.5"):
             payload = versions.list_chromium_versions(license_key="pro-key")
         self.assertEqual(payload["versions"][0]["value"], "")
-        self.assertTrue(payload["versions"][0]["label"].startswith("latest"))
+        self.assertEqual(payload["versions"][0]["label"], "latest")
+        self.assertEqual(payload["latest"], "")
         self.assertTrue(payload["errors"])
 
     def test_stale_current_pin_keeps_its_major_slot(self):

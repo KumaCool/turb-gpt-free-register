@@ -225,17 +225,9 @@ def list_chromium_versions(*, current: str = "", license_key: str = "", channel:
         add(current, source="current")
 
     if not latest:
-        runnable = [
-            version for version, row in items.items()
-            if _row_is_runnable(row, has_license=has_license)
-        ]
-        pool = runnable or []
+        pool = [version for version in items if is_full_chromium_version(version)]
         if pool:
             latest = max(pool, key=_version_key)
-        else:
-            latest = _bundled_chromium_version()
-            if latest:
-                add(latest, source="bundled")
 
     by_major: dict[int, dict] = {}
     for row in items.values():
