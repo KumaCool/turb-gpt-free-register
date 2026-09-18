@@ -427,12 +427,15 @@ CLOAK_GEOIP = True              # 按当前出口 IP 自动匹配语言/时区/W
 CLOAK_LOCALE = ""               # 留空自动；也可强制如 ja-JP / en-US
 CLOAK_TIMEZONE = ""             # 留空自动；也可强制如 Asia/Tokyo
 CLOAK_LICENSE_KEY = ""          # 留空使用免费 binary；填 Pro key 使用最新版
+CLOAK_BROWSER_VERSION = ""      # 空=latest；钉死填完整号，如 151.0.7922.108.6
+CLOAK_RELEASE_CHANNEL = ""      # 空/stable；preview=预览通道，仅 latest 时生效
 CLOAK_FINGERPRINT_SEED = ""     # 留空每次随机；固定值=固定指纹
 CLOAK_USER_DATA_DIR = ""        # 留空临时环境；填路径可持久化 profile
 ```
 
 说明：
 
+- WebUI「本地指纹浏览器」分组可用下拉选择 `CLOAK_BROWSER_VERSION`（`latest (当前号)` 或完整内核号）和 `CLOAK_RELEASE_CHANNEL`（stable/preview）。
 - `CLOAK_GEOIP=True` 会按当前出口 IP 自动生成 `locale / timezone / Accept-Language`，并传给 CloakBrowser 与 Playwright context。
 - 如果你通过项目代理池使用代理，请在 `config/proxy.py` 的 `PROXY_POOL` 填写代理；如果你使用系统代理/VPN，也会按当前实际出口 IP 自动定位。
 - 免费版没有在项目侧限制窗口数；本项目每个注册任务会启动一个 CloakBrowser 实例，即一个实例一套指纹。
