@@ -35,13 +35,13 @@
 
 ## 选定方案
 
-**配置项仍是字符串；后台用下拉选。空字符串 = latest（不传 `browser_version`）。非空 = 完整版本号，原样传给 cloakbrowser。**
+**配置项仍是字符串；后台用下拉选。空字符串 = latest。非空 = 完整版本号，原样传给 cloakbrowser。选 latest 时启动必须把探测到的最新完整号传给 Cloak，不能留空让库回落到包内捆绑核（现场 linux-arm64 捆绑 `146.0.7680.177.3`）。**
 
 来源：cloakbrowser 0.5.10 的 `launch(..., browser_version=, release_channel=)`；GitHub Releases + Pro version API 作选项来源；WebUI 已有 `config-ep-select`。
 
 ### 配置项
 
-- `CLOAK_BROWSER_VERSION` 默认 `""`。空 = latest。非空必须是完整号。
+- `CLOAK_BROWSER_VERSION` 默认 `""`。空 = latest（后台保存仍为空）。非空必须是完整号。
 - `CLOAK_RELEASE_CHANNEL` 默认 `""`。空或 `stable` = 稳定通道；`preview` = 预览。只在 latest 时有意义。后台用两项下拉：`stable`、`preview`（空按 stable 显示，保存仍允许空）。
 
 WebUI：CloakBrowser 分组，放在 `CLOAK_LICENSE_KEY` 后面。保存走现成 `.env` 覆盖。
@@ -80,15 +80,16 @@ WebUI：CloakBrowser 分组，放在 `CLOAK_LICENSE_KEY` 后面。保存走现�
 
 `build_cloak_driver`：
 
-- 两项都 strip。空则不传给 `launch` / `launch_persistent_context`（保持现状 = latest）。
-- 非空则作为 kwargs 传入。非法版本由 cloakbrowser 抛错，任务失败即可。
-- 启动日志带上实际传入的 version / channel（空记为 `latest` / `stable`）。`CloakOpenResult.raw` 同步记下。
+- 两项都 strip。非空版本号原样传入。
+- 空版本（latest）：用清单探测到的最新完整号作为 `browser_version` 传入，不要省略该参数。探测失败再省略，让 cloakbrowser 自己处理。
+- 通道：非空才传 `release_channel`。
+- 启动日志带上实际传入的 version / channel（latest 记探测到的号，探测失败记 `latest`；通道空记 `stable`）。`CloakOpenResult.raw` 同步记下。
 
 不写 `os.environ["CLOAKBROWSER_VERSION"]`。
 
 ### 文案（帮助）
 
-- 内核版本：选 `latest (x.y.z)` 跟随当前最新；选具体号则钉死，下次启动按该号下载/复用缓存。
+- 内核版本：选 `latest (x.y.z)` 跟随当前最新（启动传入该号，不回落到捆绑 146）；选具体号则钉死，下次启动按该号下载/复用缓存。
 - 发布通道：仅 latest 时生效。`preview` 才走预览通道。
 
 ## 交付物
@@ -128,7 +129,7 @@ WebUI：CloakBrowser 分组，放在 `CLOAK_LICENSE_KEY` 后面。保存走现�
 
 交付物：`core/cloakbrowser_driver.py`。
 
-验收：mock launch：空配置不含 `browser_version`；填了完整号则 kwargs 相等；`preview` 传入 `release_channel="preview"`。注册与 Codex OAuth 都只经 `build_cloak_driver`。
+验收：mock launch：空配置传入探测到的最新号（如 `151.0.7922.108.6`）；探测失败才不含 `browser_version`；填了完整号则 kwargs 相等；`preview` 传入 `release_channel="preview"`。注册与 Codex OAuth 都只经 `build_cloak_driver`。
 
 ### T04 说明 + 测试
 
@@ -141,7 +142,7 @@ WebUI：CloakBrowser 分组，放在 `CLOAK_LICENSE_KEY` 后面。保存走现�
 ## 验收依据（整功能）
 
 1. 后台内核是下拉：`latest (当前号)` + 可用完整版本。
-2. 选 latest 保存为空，启动不传 `browser_version`。
+2. 选 latest 保存为空，启动传入探测到的最新完整号，不回落到捆绑 146。
 3. 选具体号后启动传入该号。
 4. 清单失败时配置页仍能保存 latest 或已有钉。
 5. 入口/端口/代理池不变。

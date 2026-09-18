@@ -85,18 +85,31 @@ class CloakVersionCatalogTests(unittest.TestCase):
         self.assertIn("Pro", labels["151.0.7922.108.6"])
 
     def test_unlicensed_catalog_keeps_free_with_platform_asset(self):
-        with patch.object(versions, "fetch_pro_latest", side_effect=AssertionError("should not call")), \
+        with patch.object(versions, "fetch_pro_latest", return_value="151.0.7922.108.6"), \
              patch.object(versions, "fetch_github_releases", return_value=[
                  {"version": "146.0.7680.177.3", "pro": False},
                  {"version": "151.0.7922.108.6", "pro": True},
              ]), \
              patch.object(versions, "list_cached_binaries", return_value=[]):
             payload = versions.list_chromium_versions(license_key="")
+        self.assertEqual(payload["latest"], "151.0.7922.108.6")
+        self.assertEqual(payload["versions"][0]["label"], "latest (151.0.7922.108.6)")
         values = [row["value"] for row in payload["versions"]]
         self.assertIn("146.0.7680.177.3", values)
         self.assertNotIn("151.0.7922.108.6", values)
         labels = {row["value"]: row["label"] for row in payload["versions"]}
         self.assertIn("免费", labels["146.0.7680.177.3"])
+
+    def test_resolve_launch_version_uses_detected_latest(self):
+        with patch.object(versions, "list_chromium_versions", return_value={"latest": "151.0.7922.108.6"}):
+            self.assertEqual(
+                versions.resolve_launch_browser_version(current="", license_key=""),
+                "151.0.7922.108.6",
+            )
+        self.assertEqual(
+            versions.resolve_launch_browser_version(current="146.0.7680.177.5"),
+            "146.0.7680.177.5",
+        )
 
     def test_remote_failures_still_return_latest_row(self):
         with patch.object(versions, "fetch_pro_latest", side_effect=RuntimeError("down")), \
@@ -150,18 +163,34 @@ class CloakDriverVersionKwargsTests(unittest.TestCase):
         cloak_mod.launch_persistent_context = persistent
         return patch.dict(sys.modules, {"cloakbrowser": cloak_mod})
 
-    def test_empty_version_is_not_passed(self):
+    def test_empty_version_passes_detected_latest(self):
         fake_browser = MagicMock()
         fake_context = MagicMock()
         fake_page = MagicMock()
         fake_browser.new_context.return_value = fake_context
         fake_context.new_page.return_value = fake_page
         launch = MagicMock(return_value=fake_browser)
-        with patch.object(driver_mod, "_cfg", self._fake_cfg()), self._patch_cloak(launch, MagicMock()):
+        with patch.object(driver_mod, "_cfg", self._fake_cfg()), \
+             patch("core.cloakbrowser_versions.resolve_launch_browser_version", return_value="151.0.7922.108.6"), \
+             self._patch_cloak(launch, MagicMock()):
+            driver_mod.build_cloak_driver(proxy="")
+        kwargs = launch.call_args.kwargs
+        self.assertEqual(kwargs["browser_version"], "151.0.7922.108.6")
+        self.assertNotIn("release_channel", kwargs)
+
+    def test_empty_version_omits_when_latest_unknown(self):
+        fake_browser = MagicMock()
+        fake_context = MagicMock()
+        fake_page = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+        fake_context.new_page.return_value = fake_page
+        launch = MagicMock(return_value=fake_browser)
+        with patch.object(driver_mod, "_cfg", self._fake_cfg()), \
+             patch("core.cloakbrowser_versions.resolve_launch_browser_version", return_value=""), \
+             self._patch_cloak(launch, MagicMock()):
             driver_mod.build_cloak_driver(proxy="")
         kwargs = launch.call_args.kwargs
         self.assertNotIn("browser_version", kwargs)
-        self.assertNotIn("release_channel", kwargs)
 
     def test_pinned_version_and_preview_channel_are_passed(self):
         fake_browser = MagicMock()

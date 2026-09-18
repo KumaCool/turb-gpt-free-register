@@ -87,7 +87,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "CLOAK_BROWSER_VERSION", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
-        "label": "Cloak内核版本", "help": "选 latest 跟随当前最新；选具体完整号则钉死，下次启动生效",
+        "label": "Cloak内核版本", "help": "选 latest 跟随当前最新（启动传入该号，不回落到捆绑 146）；选具体完整号则钉死，下次启动生效",
     },
     {
         "key": "CLOAK_RELEASE_CHANNEL", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",

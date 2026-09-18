@@ -198,14 +198,13 @@ def list_chromium_versions(*, current: str = "", license_key: str = "", channel:
     has_license = bool(str(license_key or "").strip())
     latest = ""
     requested_channel = "preview" if str(channel or "").strip().lower() == "preview" else "stable"
-    if has_license:
-        try:
-            latest = fetch_pro_latest(requested_channel) or ""
-            if latest:
-                add(latest, pro=True, source="pro")
-        except Exception as exc:
-            logger.debug("Pro 最新内核探测失败: %s", exc)
-            errors.append(f"pro: {type(exc).__name__}: {exc}")
+    try:
+        latest = fetch_pro_latest(requested_channel) or ""
+        if latest:
+            add(latest, pro=True, source="pro")
+    except Exception as exc:
+        logger.debug("Pro 最新内核探测失败: %s", exc)
+        errors.append(f"pro: {type(exc).__name__}: {exc}")
 
     try:
         for rel in fetch_github_releases():
@@ -264,3 +263,13 @@ def list_chromium_versions(*, current: str = "", license_key: str = "", channel:
     for row in ranked:
         versions.append({"value": row["value"], "label": _row_label(row, has_license=has_license)})
     return {"latest": latest, "versions": versions, "errors": errors}
+
+
+def resolve_launch_browser_version(*, current: str = "", license_key: str = "", channel: str = "") -> str:
+    """空配置=latest：返回探测到的最新完整号，避免 cloakbrowser 回落到捆绑 146。"""
+    current = str(current or "").strip()
+    if is_full_chromium_version(current):
+        return current
+    payload = list_chromium_versions(current=current, license_key=license_key, channel=channel)
+    latest = str(payload.get("latest") or "").strip()
+    return latest if is_full_chromium_version(latest) else ""

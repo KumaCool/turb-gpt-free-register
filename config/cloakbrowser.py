@@ -22,7 +22,7 @@ CLOAK_USE_PROXY: bool = True
 # Pro license；留空则使用免费 binary。
 CLOAK_LICENSE_KEY: str = ""
 
-# Cloak Chromium 内核。空=latest；钉死须完整号，如 151.0.7922.108.6。
+# Cloak Chromium 内核。空=latest（启动传入探测到的最新号）；钉死须完整号，如 151.0.7922.108.6。
 CLOAK_BROWSER_VERSION: str = ""
 
 # 发布通道。空/stable=稳定；preview=预览。仅未钉内核、走 latest 时生效。

@@ -502,6 +502,17 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
         opts["license_key"] = license_key
     browser_version = str(getattr(_cfg, "CLOAK_BROWSER_VERSION", "") or "").strip()
     release_channel = str(getattr(_cfg, "CLOAK_RELEASE_CHANNEL", "") or "").strip()
+    if not browser_version:
+        try:
+            from core.cloakbrowser_versions import resolve_launch_browser_version
+            browser_version = resolve_launch_browser_version(
+                current="",
+                license_key=license_key,
+                channel=release_channel,
+            )
+        except Exception as exc:
+            logger.debug("[Cloak] latest 内核探测失败：%s: %s", type(exc).__name__, exc)
+            browser_version = ""
     if browser_version:
         opts["browser_version"] = browser_version
     if release_channel:
